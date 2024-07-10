@@ -1,0 +1,287 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Server.Gumps;
+using Server.Mobiles;
+using Server.Network;
+using Server.Targeting;
+using ModernUO.Serialization;
+using Server.Accounting;
+
+namespace Server.ChatSystem
+{
+    [SerializationGenerator(0, false)]
+    public partial class ChatSystem : Item
+    {
+        private static readonly bool m_Enabled = true; // Enable or Disable Chat System
+        private static ChatSystem instance;
+
+        public static void Initialize()
+        {
+            if (m_Enabled)
+            {
+                CommandSystem.Register("Chat", AccessLevel.Player, Chat_OnCommand);
+                CommandSystem.Register("C", AccessLevel.Player, Chat_OnCommand);
+                CommandSystem.Register("ChatSquelch", AccessLevel.Counselor, Squelch_OnCommand);
+
+                Console.ForegroundColor = ConsoleColor.Blue;
+                Console.Write("Chat System: Loading...");
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.Write("done ");
+                Console.WriteLine("( ***Chat System Activated*** )");
+                Console.ResetColor();
+
+                // Ensure an instance of ChatSystem exists
+                EnsureChatSystemInstance();
+            }
+            else
+            {
+                Console.ForegroundColor = ConsoleColor.Blue;
+                Console.Write("Chat System: Loading...");
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.Write("done ");
+                Console.ForegroundColor = ConsoleColor.DarkRed;
+                Console.WriteLine("( ***Turned Off*** )");
+                Console.ResetColor();
+            }
+        }
+
+        private static void EnsureChatSystemInstance()
+        {
+            if (instance == null)
+            {
+                instance = new ChatSystem();
+                World.AddEntity(instance); // Add the ChatSystem instance globally
+            }
+        }
+
+        private readonly Dictionary<Mobile, bool> m_Players;
+        private readonly List<Mobile> m_Squelched;
+        private readonly List<string> m_Chat;
+
+        [Constructible]
+        public ChatSystem() : base(1)
+        {
+            Movable = false;
+            m_Squelched = new List<Mobile>();
+            m_Players = new Dictionary<Mobile, bool>();
+            m_Chat = new List<string>();
+        }
+
+        public ChatSystem(Serial serial) : base(serial)
+        {
+        }
+
+        public void AddPlayer(Mobile from)
+        {
+            if (from.Account is Account account)
+            {
+                if (account.GetTag("squelched") != null)
+                {
+                    from.SendMessage("You have been squelched from the chat system and cannot join.");
+                    return;
+                }
+            }
+
+            if (!m_Players.ContainsKey(from))
+            {
+                m_Players.Add(from, from.AccessLevel == AccessLevel.Player);
+                from.SendMessage(0x35, "You have joined the Chat System! Type [chat <message> to talk.");
+                UpdateGump(from);
+            }
+        }
+
+        public void ToggleVisible(Mobile from)
+        {
+            if (m_Players.ContainsKey(from))
+            {
+                m_Players[from] = !m_Players[from];
+            }
+        }
+
+        public void SquelchPlayer(Mobile from)
+        {
+            if (from.Account is Account account)
+            {
+                if (m_Squelched.Contains(from))
+                {
+                    m_Squelched.Remove(from);
+                    account.RemoveTag("squelched");
+                }
+                else
+                {
+                    m_Squelched.Add(from);
+                    account.AddTag("squelched", "true");
+                }
+            }
+        }
+
+        public void RemovePlayer(Mobile from)
+        {
+            m_Players.Remove(from);
+            UpdateGump(from);
+        }
+
+        public void Say(Mobile from, string msg)
+        {
+            m_Chat.Add($"{(from.AccessLevel > AccessLevel.Player ? "@" : "")}{from.Name}: {msg}");
+
+            if (m_Chat.Count > 20)
+            {
+                m_Chat.RemoveAt(0);
+            }
+
+            UpdateGump();
+        }
+
+        public void UpdateGump()
+        {
+            foreach (var player in m_Players.Keys.ToList())
+            {
+                UpdateGump(player);
+            }
+        }
+
+        public void UpdateGump(Mobile player)
+        {
+            if (player.HasGump<ChatGump>())
+            {
+                player.CloseGump<ChatGump>();
+            }
+
+            player.SendGump(new ChatGump(player, this));
+        }
+
+        public class ChatGump : Gump
+        {
+            private readonly ChatSystem m_System;
+
+            public ChatGump(Mobile from, ChatSystem system) : base(50, 100)
+            {
+                m_System = system;
+
+                Closable = true;
+                Disposable = true;
+                Draggable = true;
+                Resizable = false;
+
+                AddBackground(0, 0, 190, 355, 9200);
+                AddButton(16, 269, 4005, 4007, 1);
+                AddLabel(40, 11, 0, "UO:Genesis Chat");
+
+                string players = "";
+
+                foreach (var player in m_System.m_Players.Keys.ToList())
+                {
+                    if (player.Deleted)
+                    {
+                        m_System.m_Players.Remove(player);
+                        continue;
+                    }
+
+                    if (m_System.m_Players[player])
+                    {
+                        players += $"{player.Name}<BR>";
+                    }
+                    else if (from.AccessLevel > AccessLevel.Player)
+                    {
+                        players += $"#{player.Name}<BR>";
+                    }
+                }
+
+                AddHtml(10, 50, 163, 188, players, true, true);
+                AddLabel(10, 30, 0, "Players Available");
+                AddLabel(14, 244, 0, "Type [chat <msg> to talk");
+
+                m_System.m_Players.TryGetValue(from, out var isVisible);
+                AddLabel(54, 270, 0, isVisible ? "Hide Name" : "Show Name");
+                AddLabel(56, 298, 0, "Quit Chat");
+                AddButton(16, 296, 4017, 4019, 0);
+            }
+
+            public override void OnResponse(NetState sender, in RelayInfo info)
+            {
+                Mobile from = sender.Mobile;
+
+                switch (info.ButtonID)
+                {
+                    case 0:
+                        from.SendMessage(0x35, "You can rejoin chat anytime by using the [chat command.");
+                        break;
+                    case 1:
+                        m_System.ToggleVisible(from);
+                        m_System.UpdateGump(from);
+                        break;
+                }
+            }
+        }
+
+        [Usage("Chat")]
+        [Description("Joins the chat system or sends a message.")]
+        public static void Chat_OnCommand(CommandEventArgs e)
+        {
+            Mobile caller = e.Mobile;
+
+            // Ensure an instance of ChatSystem exists
+            EnsureChatSystemInstance();
+
+            var system = instance;
+
+            if (e.Length >= 1)
+            {
+                var message = e.ArgString.Trim();
+
+                if (!system.m_Players.ContainsKey(caller))
+                {
+                    caller.SendMessage("Usage: [chat <message>");
+                    return;
+                }
+
+                foreach (Mobile m in system.m_Players.Keys.ToList())
+                {
+                    m.SendMessage(0x35, $"[{(caller.AccessLevel > AccessLevel.Player ? "@" : "")}{caller.Name}]: {message}");
+                }
+            }
+            else
+            {
+                if (!system.m_Players.ContainsKey(caller))
+                {
+                    system.AddPlayer(caller);
+                }
+                else
+                {
+                    caller.SendMessage("Usage: [chat <message>");
+                }
+            }
+        }
+
+        [Usage("ChatSquelch")]
+        [Description("Squelches a player in the chat system.")]
+        public static void Squelch_OnCommand(CommandEventArgs e)
+        {
+            Mobile caller = e.Mobile;
+
+            // Ensure an instance of ChatSystem exists
+            EnsureChatSystemInstance();
+
+            var system = instance;
+
+            caller.Target = new SquelchTarget(system);
+        }
+
+        private class SquelchTarget : Target
+        {
+            private readonly ChatSystem m_System;
+
+            public SquelchTarget(ChatSystem system) : base(15, false, TargetFlags.None) => m_System = system;
+
+            protected override void OnTarget(Mobile from, object targ)
+            {
+                if (targ is Mobile target)
+                {
+                    m_System.SquelchPlayer(target);
+                }
+            }
+        }
+    }
+}

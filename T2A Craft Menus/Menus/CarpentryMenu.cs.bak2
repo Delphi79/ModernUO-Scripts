@@ -1,0 +1,126 @@
+﻿using System;
+using Server.Network;
+using Server.Engines.Craft;
+using Server.Items;
+
+
+namespace Server.Gumps
+{
+    public class CarpentryMenu : DynamicGump
+    {
+        private Mobile _from;
+        private CraftSystem _craftSystem;
+        private const int ItemsPerPage = 4; // Number of items to display per page
+        private int _currentPage;
+
+        public CarpentryMenu(Mobile from, CraftSystem craftSystem, BaseTool tool, int currentPage = 0)
+            : base(150, 200)
+        {
+            _from = from;
+            _craftSystem = craftSystem;
+            _currentPage = currentPage;
+        }
+
+        protected override void BuildLayout(ref DynamicGumpBuilder builder)
+        {
+            builder.AddPage(0);
+
+            builder.SetNoResize();
+            builder.SetNoDispose();
+
+            int startX = 40;  // X position of the first button/item
+            int startY = 40;  // Y position of the buttons/items
+
+            // Buttons and Tooltips (for clicking the items)
+            int[] itemIDs = { 2902, 2869, 3650, 2897, 2906, 2889, 2959, 2960 }; // List of item IDs
+            string[] itemNames = { "Chairs", "Tables", "Miscellaneous", "Fancy Wooden Chair", "Bamboo Chair", "Writing Table", "Yew Wood Table", "Large Table" };
+            int itemStartIndex = _currentPage * ItemsPerPage;
+            int itemEndIndex = Math.Min(itemStartIndex + ItemsPerPage, itemIDs.Length);
+
+            for (int i = itemStartIndex; i < itemEndIndex; i++)
+            {
+                int buttonID = (i + 1); // Unique button ID across pages
+                builder.AddButton(startX, startY, 2260, 2260, buttonID, GumpButtonType.Reply, 0);
+                builder.AddTooltip(1042971, itemNames[i]); // Associate tooltip with the button
+                startX += 50;
+            }
+
+            // Main Gump Menu Background
+            builder.AddImage(0, 0, 2320);
+
+            // Adding items on top of the background image
+            startX = 40; // Reset startX for items
+            for (int i = itemStartIndex; i < itemEndIndex; i++)
+            {
+                builder.AddItem(startX, startY, itemIDs[i]);
+                startX += 50;
+            }
+
+            // Page Navigation
+            if (_currentPage > 0)
+            {
+                builder.AddButton(10, 60, 9909, 9910, 1000, GumpButtonType.Reply, 0); // Previous page button
+            }
+
+            if (itemEndIndex < itemIDs.Length)
+            {
+                builder.AddButton(265, 60, 9903, 9904, 1001, GumpButtonType.Reply, 0); // Next page button
+            }
+
+            // Menu Labels
+            builder.AddLabel(55, 15, 1152, @"What would you like to make?");
+            builder.AddLabel(110, 100, 1152, @"Carpentry");
+        }
+
+        public override void OnResponse(NetState sender, in RelayInfo info)
+        {
+            int itemIndex = info.ButtonID - 1; // Adjust index to match item array
+
+            if (itemIndex >= 0 && itemIndex < 8) // Ensure it's within the valid range
+            {
+                switch (itemIndex)
+                {
+                    case 0:
+                        _from.SendMessage(0, "Chairs Selected.");
+                        break;
+                    case 1:
+                        _from.SendMessage(0, "Tables Selected.");
+                        break;
+                    case 2:
+                        _from.SendMessage(0, "Miscellaneous Selected.");
+                        break;
+                    case 3:
+                        _from.SendMessage(0, "Fancy Wooden Chair.");
+                        break;
+                    case 4:
+                        _from.SendMessage(0, "Bamboo Chair.");
+                        break;
+                    case 5:
+                        _from.SendMessage(0, "Writing Table.");
+                        break;
+                    case 6:
+                        _from.SendMessage(0, "Yew Wood Table.");
+                        break;
+                    case 7:
+                        _from.SendMessage(0, "Large Table.");
+                        break;
+                }
+            }
+            else
+            {
+                switch (info.ButtonID)
+                {
+                    case 1000:
+                        _from.SendGump(new CarpentryMenu(_from, _craftSystem, null, _currentPage - 1)); // Previous page
+                        break;
+                    case 1001:
+                        _from.SendGump(new CarpentryMenu(_from, _craftSystem, null, _currentPage + 1)); // Next page
+                        break;
+                    default:
+                        _from.SendMessage(0, "No action.");
+                        break;
+                }
+            }
+        }
+    }
+}

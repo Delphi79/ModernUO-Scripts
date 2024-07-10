@@ -1,0 +1,232 @@
+using System;
+using System.Collections.Generic;
+using Server;
+using Server.Commands;
+using Server.Gumps;
+using Server.Mobiles;
+using Server.Network;
+
+namespace Server.ChatSystem
+{
+    public class ChatChannel
+    {
+        public string Name { get; }
+        private List<Mobile> _members;
+        private List<string> _messages;
+
+        public ChatChannel(string name)
+        {
+            Name = name;
+            _members = new List<Mobile>();
+            _messages = new List<string>();
+        }
+
+        public void Join(Mobile m)
+        {
+            if (!_members.Contains(m))
+            {
+                _members.Add(m);
+                m.SendMessage(0x35, $"You have joined the {Name} channel.");
+            }
+        }
+
+        public void Leave(Mobile m)
+        {
+            if (_members.Contains(m))
+            {
+                _members.Remove(m);
+                m.SendMessage(0x35, $"You have left the {Name} channel.");
+            }
+        }
+
+        public void SendMessage(Mobile sender, string message)
+        {
+            string formattedMessage = $"{sender.Name}: {message}";
+            _messages.Add(formattedMessage);
+
+            if (_messages.Count > 50)
+                _messages.RemoveAt(0);
+
+            foreach (var member in _members)
+            {
+                if (sender.AccessLevel >= AccessLevel.GameMaster || member.AccessLevel >= AccessLevel.GameMaster)
+                {
+                    // GM can see all messages and all members can see GM's messages
+                    member.SendMessage(0x35, formattedMessage);
+                }
+                else if (_members.Contains(member))
+                {
+                    // Regular players only see messages if they are in the same channel
+                    member.SendMessage(0x35, formattedMessage);
+                }
+            }
+        }
+
+        public string GetMessagesHtml()
+        {
+            return string.Join("<br>", _messages);
+        }
+
+        public List<Mobile> Members => _members;
+    }
+
+    public static class ChatSystem
+    {
+        private static bool _enabled = true;
+        public static Dictionary<string, ChatChannel> _channels = new Dictionary<string, ChatChannel>();
+        private static Dictionary<Mobile, ChatChannel> _currentChannels = new Dictionary<Mobile, ChatChannel>();
+
+        static ChatSystem()
+        {
+            Initialize();
+        }
+
+        public static void Initialize()
+        {
+            if (_enabled)
+            {
+                CommandSystem.Register("Chat", AccessLevel.Player, new CommandEventHandler(OpenChatWindow_OnCommand));
+                CommandSystem.Register("c", AccessLevel.Player, new CommandEventHandler(SendChatMessage_OnCommand));
+
+                InitializeChannels();
+
+                Console.ForegroundColor = ConsoleColor.Blue;
+                Console.Write("Chat System: Loading...");
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.Write("done ");
+                Console.WriteLine("( ***Chat System Activated*** )");
+                Console.ResetColor();
+            }
+            else
+            {
+                Console.ForegroundColor = ConsoleColor.Blue;
+                Console.Write("Chat System: Loading...");
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.Write("done ");
+                Console.ForegroundColor = ConsoleColor.DarkRed;
+                Console.WriteLine("( ***Turned Off*** )");
+                Console.ResetColor();
+            }
+        }
+
+        private static void InitializeChannels()
+        {
+            _channels["General"] = new ChatChannel("General");
+            _channels["Trade"] = new ChatChannel("Trade");
+            _channels["Help"] = new ChatChannel("Help");
+        }
+
+        private static void OpenChatWindow_OnCommand(CommandEventArgs e)
+        {
+            e.Mobile.SendGump(new ChatGump(e.Mobile));
+        }
+
+        private static void SendChatMessage_OnCommand(CommandEventArgs e)
+        {
+            if (_currentChannels.TryGetValue(e.Mobile, out var channel))
+            {
+                if (e.Length >= 1)
+                {
+                    string message = e.ArgString.Trim();
+                    channel.SendMessage(e.Mobile, message);
+                }
+                else
+                {
+                    e.Mobile.SendMessage(0x35, "Usage: c <message>");
+                }
+            }
+            else
+            {
+                e.Mobile.SendMessage(0x35, "You are not in any channel. Use [chat to open the chat window.");
+            }
+        }
+
+        public static void JoinChannel(Mobile mobile, string channelName)
+        {
+            // Leave current channel if already in one
+            if (_currentChannels.TryGetValue(mobile, out var currentChannel))
+            {
+                currentChannel.Leave(mobile);
+                _currentChannels.Remove(mobile);
+            }
+
+            // Join new channel
+            if (_channels.TryGetValue(channelName, out var channel))
+            {
+                channel.Join(mobile);
+                _currentChannels[mobile] = channel;
+            }
+        }
+
+        public static void LeaveCurrentChannel(Mobile mobile)
+        {
+            if (_currentChannels.TryGetValue(mobile, out var channel))
+            {
+                channel.Leave(mobile);
+                _currentChannels.Remove(mobile);
+            }
+            else
+            {
+                mobile.SendMessage(0x35, "You are not in any channel.");
+            }
+        }
+    }
+
+    public class ChatGump : Gump
+    {
+        private Mobile _mobile;
+
+        public ChatGump(Mobile mobile) : base(50, 50)
+        {
+            _mobile = mobile;
+
+            AddPage(0);
+            AddBackground(0, 0, 400, 300, 9270);
+            AddLabel(20, 20, 1153, "Available Channels");
+
+            int y = 50;
+            foreach (var channelName in ChatSystem._channels.Keys)
+            {
+                AddButton(20, y, 4005, 4007, (int)channelName.GetHashCode(), GumpButtonType.Reply, 0);
+                AddLabel(55, y, 1153, channelName);
+                y += 25;
+            }
+
+            AddButton(20, y, 4005, 4007, 1, GumpButtonType.Reply, 0);
+            AddLabel(55, y, 1153, "Leave Current Channel");
+        }
+
+        public override void OnResponse(NetState sender, in RelayInfo info)
+        {
+            int buttonId = info.ButtonID;
+            if (buttonId != 0)
+            {
+                if (buttonId == 1)
+                {
+                    // Leave current channel
+                    ChatSystem.LeaveCurrentChannel(_mobile);
+                    _mobile.SendGump(new ChatGump(_mobile));
+                }
+                else
+                {
+                    // Join a channel
+                    string channelName = null;
+                    foreach (var name in ChatSystem._channels.Keys)
+                    {
+                        if (name.GetHashCode() == buttonId)
+                        {
+                            channelName = name;
+                            break;
+                        }
+                    }
+
+                    if (channelName != null)
+                    {
+                        ChatSystem.JoinChannel(_mobile, channelName);
+                        _mobile.SendGump(new ChatGump(_mobile));
+                    }
+                }
+            }
+        }
+    }
+}
